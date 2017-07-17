@@ -65,9 +65,18 @@ if ( (! $lasttime) || ( ($timenow - $lasttime) > (60*60))) {
     print $temp $datastring . "\n";
     close($temp);
     
-    my $data = decode_json($datastring);
+    my $data = 0;
 
-    for (my $ind = 0; $ind < @{$data}; $ind++) {
+    eval {
+	$data = decode_json($datastring);
+	1;
+    } or do {
+	my $e = $@;
+	#nothing - not valid JSON
+    };
+	
+
+    for (my $ind = 0; $data && $ind < @{$data}; $ind++) {
 	my $vessel = $data->[$ind];
 
 	if ($debug) {
@@ -122,7 +131,9 @@ if ( (! $lasttime) || ( ($timenow - $lasttime) > (60*60))) {
     }
 
     #----Save last time extended data was retrieved
-    $extended{'LASTTIME'} = $timenow;
+    if ($data) {
+	$extended{'LASTTIME'} = $timenow;
+    }
 
 }
 else {
@@ -151,7 +162,15 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 	print $temp $datastring . "\n";
 	close($temp);
 
-    	my $data = decode_json($datastring);
+    	my $data = 0;
+
+	eval {
+	    $data = decode_json($datastring);
+	    1;
+	} or do {
+	    my $e = $@;
+	    #Not valid JSON - do nothing
+	};
 
 
 	#----Purge some old vessels----
@@ -161,34 +180,36 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 	# b) speed was greater than 2 knts, or
 	# c) speed <= 0.5 kts and older than 48 hrs
 
-	my $hours_5  = 5*60*60;
-	my $hours_48 = 48*60*60;
+	if ($data) {
+	    my $hours_5  = 5*60*60;
+	    my $hours_48 = 48*60*60;
 	
-	foreach my $simplekey (keys %simple) {
-	    next if ($simplekey eq "LASTTIME");
+	    foreach my $simplekey (keys %simple) {
+		next if ($simplekey eq "LASTTIME");
 	    
-	    my $simpledata = decode_json($simple{$simplekey});
+		my $simpledata = decode_json($simple{$simplekey});
 	    
-	    my $vessel_ts = Time::Piece->strptime($simpledata->{'TIMESTAMP'},
+		my $vessel_ts = Time::Piece->strptime($simpledata->{'TIMESTAMP'},
 						  "%Y-%m-%dT%T");
-	    my $vessel_speed = $simpledata->{'SPEED'} / 10;
+		my $vessel_speed = $simpledata->{'SPEED'} / 10;
 
-	    my $diff = $localtime - $vessel_ts;
+		my $diff = $localtime - $vessel_ts;
 
-	    if ( (($diff >= $hours_5) && ($vessel_speed > 0.5))
-		 || (($diff >= $hours_48) && ($vessel_speed <= 0.5))
-		 || ($vessel_speed >= 2)
-	       ) {
-		print STDERR "Deleting $simplekey  with TS " 
-		    .  $simpledata->{'TIMESTAMP'} 
-		. " and speed $vessel_speed kts\n" if ($debug);
-
-		delete $simple{$simplekey};
+		if ( (($diff >= $hours_5) && ($vessel_speed > 0.5))
+		     || (($diff >= $hours_48) && ($vessel_speed <= 0.5))
+		     || ($vessel_speed >= 2)
+		    ) {
+		    print STDERR "Deleting $simplekey  with TS " 
+			.  $simpledata->{'TIMESTAMP'} 
+		    . " and speed $vessel_speed kts\n" if ($debug);
+		    
+		    delete $simple{$simplekey};
+		}
 	    }
 	}
 
 
-	for (my $ind = 0; $ind < @{$data}; $ind++) {
+	for (my $ind = 0; $data && $ind < @{$data}; $ind++) {
 	    my $vessel = $data->[$ind];
 
 	    if ($debug) {
@@ -216,7 +237,9 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 	}
 
 	#-----Save last time simple data was retrieved
-	$simple{'LASTTIME'} = $timenow;
+	if ($data) {
+	    $simple{'LASTTIME'} = $timenow;
+	}
     }
 
 }
