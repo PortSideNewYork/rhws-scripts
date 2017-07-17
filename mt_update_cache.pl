@@ -18,8 +18,8 @@ use Locale::Country;
 
 my $debug = 0;
 
-#my $gmtime = gmtime;
-my $localtime = localtime;
+my $gmtime = gmtime;
+#my $localtime = localtime;
 
 #Set working directory, since we do some file stuff here
 chdir("/home/portside/mtupd");
@@ -97,7 +97,7 @@ if ( (! $lasttime) || ( ($timenow - $lasttime) > (60*60))) {
 	$vh{"LONG"}   = $vessel->[2];
 	$vh{"SPEED"}  = $vessel->[3];
 	$vh{"COURSE"} = $vessel->[4];
-	$vh{"TIMESTAMP"} = $vessel->[5];
+	$vh{"TIMESTAMP"} = $vessel->[5] . "Z";
 	$vh{"SHIPNAME"} = $vessel->[6];
 	$vh{"SHIPTYPE"} = $vessel->[7];
 	$vh{"IMO"}    = $vessel->[8];
@@ -115,17 +115,15 @@ if ( (! $lasttime) || ( ($timenow - $lasttime) > (60*60))) {
 
 	$vh{"CURRENT_PORT"} = $vessel->[11];
 	$vh{"LAST_PORT"} = $vessel->[12];
-	$vh{"LAST_PORT_TIME"} = $vessel->[13];
+	$vh{"LAST_PORT_TIME"} = $vessel->[13] . "Z";
 	$vh{"DESTINATION"} = $vessel->[14];
-	$vh{"ETA"} = $vessel->[15];
+	$vh{"ETA"} = $vessel->[15] . "Z";
 	$vh{"LENGTH"} = $vessel->[16];
 	$vh{"WIDTH"} = $vessel->[17];
 	$vh{"DRAUGHT"} = $vessel->[18];
 	$vh{"GRT"} = $vessel->[19];
 	$vh{"DWT"} = $vessel->[20];
 	$vh{"YEAR_BUILT"} = $vessel->[21];
-
-
 	
 	$extended{$vessel->[0]} = encode_json(\%vh);
     }
@@ -175,6 +173,7 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 
 	#----Purge some old vessels----
 	#$localtime is the current time
+	#$gmtime is current time
 	#loop through old simple data and wipe out anything where:
 	# a) TIMESTAMP is older than 5 hours & speed was greater than 0.5 kts, or
 	# b) speed was greater than 2 knts, or
@@ -188,12 +187,18 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 		next if ($simplekey eq "LASTTIME");
 	    
 		my $simpledata = decode_json($simple{$simplekey});
+
+		#Add Z to end of timestamp if missing
+		my $temp_ts = $simpledata->{'TIMESTAMP'};
+		if ($temp_ts !~ /Z$/) {
+		    $temp_ts .= "Z";
+		}
 	    
-		my $vessel_ts = Time::Piece->strptime($simpledata->{'TIMESTAMP'},
-						  "%Y-%m-%dT%T");
+		my $vessel_ts = Time::Piece->strptime($temp_ts,
+						  "%Y-%m-%dT%TZ");
 		my $vessel_speed = $simpledata->{'SPEED'} / 10;
 
-		my $diff = $localtime - $vessel_ts;
+		my $diff = $gmtime - $vessel_ts;
 
 		if ( (($diff >= $hours_5) && ($vessel_speed > 0.5))
 		     || (($diff >= $hours_48) && ($vessel_speed <= 0.5))
@@ -231,7 +236,7 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 	    $vh{"SPEED"}  = $vessel->[3];
 	    $vh{"COURSE"}  = $vessel->[4];
 	    $vh{"STATUS"}  = $vessel->[5];
-	    $vh{"TIMESTAMP"}  = $vessel->[6];
+	    $vh{"TIMESTAMP"}  = $vessel->[6] . "Z";
 
 	    $simple{$vessel->[0]} = encode_json(\%vh);
 	}
@@ -298,7 +303,7 @@ $mary{"YEAR_BUILT"} = "1938";
 $mary{"STATUS"} = "5"; #moored
 $mary{"SHIPTYPE"} = "80"; #tanker
 
-$mary{"TIMESTAMP"} = $localtime->datetime;
+$mary{"TIMESTAMP"} = $gmtime->datetime . "Z";
 
 push(@outputdata, \%mary);
 $vcount++;
