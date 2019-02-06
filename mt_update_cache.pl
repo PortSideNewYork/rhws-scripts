@@ -322,7 +322,7 @@ close($outputfile);
 
 
 #----Now move file under web root
-`mv -b $outputfile_name /var/www`;
+`mv --backup=simple $outputfile_name /var/www`;
 
 die "Cannot move $outputfile_name to /var/www" if ($?);
 
