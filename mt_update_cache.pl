@@ -15,6 +15,7 @@ use JSON;
 use DB_File;
 use Time::Piece;
 use Locale::Country;
+use Data::Dumper;
 
 my $debug = 0;
 
@@ -47,7 +48,8 @@ chomp $apikey;
 #----Read from/Save to hash file
 tie (my %extended, 'DB_File', 'extended_info');
 
-my $extended_url = "http://services.marinetraffic.com/api/exportvessels/${apikey}?protocol=json&msgtype=extended";
+my $extended_url = "https://services.marinetraffic.com/api/exportvessels/${apikey}?protocol=json&msgtype=extended";
+#my $extended_url = "https://services.marinetraffic.com/api/exportvessels/v:8/${apikey}&protocol=json&msgtype=extended";
 
 #----first check whether it's less than an hour since last update
 my $timenow = time(); #seconds since 1/1/1970
@@ -64,7 +66,7 @@ if ( (! $lasttime) || ( ($timenow - $lasttime) > (60*60))) {
     open(my $temp, '>', "extended.txt");
     print $temp $datastring . "\n";
     close($temp);
-    
+
     my $data = 0;
 
     eval {
@@ -74,7 +76,9 @@ if ( (! $lasttime) || ( ($timenow - $lasttime) > (60*60))) {
 	my $e = $@;
 	#nothing - not valid JSON
     };
-	
+
+    #if not an array, was some sort of error, so skip
+    $data = 0 if $datastring !~ m#^\[#;
 
     for (my $ind = 0; $data && $ind < @{$data}; $ind++) {
 	my $vessel = $data->[$ind];
@@ -144,7 +148,7 @@ else {
 #----Save simple info in hash file
 tie (my %simple, 'DB_File', 'simple_info');
 
-my $simple_url = "http://services.marinetraffic.com/api/exportvessels/${apikey}?protocol=json";
+my $simple_url = "https://services.marinetraffic.com/api/exportvessels/v:8/${apikey}?protocol=json";
 
 #----Update simple data if more than 2 minutes since last update
 $timenow = time();
@@ -193,7 +197,7 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 		if ($temp_ts !~ /Z$/) {
 		    $temp_ts .= "Z";
 		}
-	    
+say STDERR $temp_ts;	    
 		my $vessel_ts = Time::Piece->strptime($temp_ts,
 						  "%Y-%m-%dT%TZ");
 		my $vessel_speed = $simpledata->{'SPEED'} / 10;
@@ -231,12 +235,17 @@ if ( (! $lasttime) || ( ( $timenow - $lasttime ) > (2 * 60) ) ) {
 	    #-----map array to hash for sanity's sake
 	    my %vh;
 	    $vh{"MMSI"} = $vessel->[0];
-	    $vh{"LAT"}  = $vessel->[1];
-	    $vh{"LONG"}  = $vessel->[2];
-	    $vh{"SPEED"}  = $vessel->[3];
-	    $vh{"COURSE"}  = $vessel->[4];
-	    $vh{"STATUS"}  = $vessel->[5];
-	    $vh{"TIMESTAMP"}  = $vessel->[6] . "Z";
+	    $vh{"IMO"} = $vessel->[1];
+	    $vh{"SHIP_ID"} = $vessel->[2];
+	    $vh{"LAT"}  = $vessel->[3];
+	    $vh{"LONG"}  = $vessel->[4];
+	    $vh{"SPEED"}  = $vessel->[5];
+	    $vh{"HEADING"}  = $vessel->[6];
+	    $vh{"COURSE"}  = $vessel->[7];
+	    $vh{"STATUS"}  = $vessel->[8];
+	    $vh{"TIMESTAMP"}  = $vessel->[9] . "Z";
+	    $vh{"DSRC"}  = $vessel->[10];
+	    $vh{"UTC_SECONDS"}  = $vessel->[11];
 
 	    $simple{$vessel->[0]} = encode_json(\%vh);
 	}
