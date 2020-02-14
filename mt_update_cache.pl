@@ -305,6 +305,7 @@ $mary{"SPEED"} = "0";
 $mary{"COURSE"} = "47";
 #$mary{"MMSI"} = "000000000";
 $mary{"MMSI"} = "-5227445"; #what MarineTraffic uses
+$mary{"SHIP_ID"} = "964330";
 $mary{"SHIPNAME"} = "MARY A. WHALEN";
 $mary{"FLAG"} = "US";
 $mary{"LENGTH"} = "52.4"; #172 ft in meters
