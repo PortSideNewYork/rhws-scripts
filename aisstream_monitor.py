@@ -102,9 +102,9 @@ def main():
         except ConnectionResetError as err:
             secs = 10
             logger.error("Connection error: " + str(err))
-            logger.info("Sleeping %d s. ...", secs)
+            logger.debug("Sleeping %d s. ...", secs)
             time.sleep(secs)
-            logger.info("Trying again ...")
+            logger.debug("Trying again ...")
 
 
 def connect_ais_stream(api_key, data):
@@ -149,7 +149,7 @@ def connect_ais_stream(api_key, data):
         #print(f"{message_type} {mmsi} {time_utc}")
         #async with lock:
         if not message_type in data:
-            logger.info("Initializing data['%s']", message_type)
+            logger.debug("Initializing data['%s']", message_type)
             data[message_type] = {}
         
         data[message_type][mmsi] = message
@@ -177,17 +177,17 @@ def print_data_stats(data):
         #print(type)
         #subpiece = data[type]
         #print(len(subpiece))
-        logger.info('%s: %d', type, len(data[type]))
+        logger.debug('%s: %d', type, len(data[type]))
 
 
 def write_data(data):
     tempfile = datafile + '.tmp'
     with open(tempfile, mode='w') as df:
         json.dump(data, df)
-        logger.info("Wrote " + tempfile)
+        logger.debug("Wrote " + tempfile)
         
     shutil.move(tempfile, datafile)
-    logger.info("Renamed %s to %s", tempfile, datafile)
+    logger.info("Wrote new %s", datafile)
 
 
 def write_mtdata(data):
@@ -236,12 +236,12 @@ def write_mtdata(data):
     mtfile = 'mtdata.json'
     with open(mtfile, 'w') as f:
         json.dump(newdata, f)
-    logger.info("Wrote new local %s", mtfile)
+    logger.debug("Wrote new local %s", mtfile)
 
     targetdir = '/var/www'
     if os.path.exists(targetdir):
         shutil.copy(mtfile, targetdir)
-        logger.info("Wrote new %s/%s", targetdir, mtfile)
+        logger.debug("Wrote new %s/%s", targetdir, mtfile)
 
 
 #----Purge some old vessels----
