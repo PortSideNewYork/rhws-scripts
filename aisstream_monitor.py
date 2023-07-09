@@ -184,7 +184,7 @@ def write_data(data):
     tempfile = datafile + '.tmp'
     with open(tempfile, mode='w') as df:
         json.dump(data, df)
-        logger.info("Wrote " + tempfile.absolute())
+        logger.info("Wrote " + tempfile)
         
     shutil.move(tempfile, datafile)
     logger.info("Renamed %s to %s", tempfile, datafile)
