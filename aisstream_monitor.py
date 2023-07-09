@@ -1,14 +1,18 @@
+#!/usr/bin/python3
+
 import asyncio
 import configparser
-import websockets
+from datetime import datetime, timezone, timedelta
 import json
-from pathlib import Path
 import logging
+import os
+from pathlib import Path
 import pprint
-from datetime import datetime, timezone
+import re
 import shutil
 import sys
 import time
+import websockets
 
 
 
@@ -62,46 +66,43 @@ def main():
     ch = logging.StreamHandler()
     ch.setFormatter(formatter)
     logger.addHandler(ch)
+
+    #Set working directory, since we do some file stuff here
+    try:
+        os.chdir('/home/portside/aisstream')
+    except Exception:
+        pass #not on Unix
     
-    config.read('aisstream_api_key.ini')
-
-    api_key = config['DEFAULT']['APIKey']
-
-    data = {}
+    try:
+        config.read('aisstream_api_key.ini')
+        api_key = config['DEFAULT']['APIKey']
+    except Exception:
+        logger.fatal("Cannot read in API key")
+        sys.exit(1)
 
     if datafile.exists():
-        with open(datafile, 'r') as f:
-            data = json.loads(f.read())
+        with open(datafile, mode='r') as f:
+            data = json.load(f)
 
-            logger.info(f"Read {datafile}")
-            print_data_stats(data)
-        
+        logger.info("Read %s", datafile.absolute())
+        print_data_stats(data)
+
+        purge_data(data)
+    
+    else:
+        logger.info("No existing %s", datafile)
+        data = {}
     
     while True:
         try:
             asyncio.run(asyncio.run(connect_ais_stream(api_key, data)))
         except ConnectionResetError as err:
             secs = 10
-            logger.error("Connection error:", err)
-            logger.info(f"Sleeping {secs} s....")
+            logger.error("Connection error: " + str(err))
+            logger.info("Sleeping %d s. ...", secs)
             time.sleep(secs)
-            logger.info(f"Trying again...")
+            logger.info("Trying again ...")
 
-
-def print_data_stats(data):
-    for type in data:
-        logger.info(f"{type}: {len(data[type])}")
-
-
-def write_data(data):
-    tempfile = Path(datafile.name + '.tmp')
-    with open(tempfile, 'w') as df:
-        json.dump(data, df)
-        logger.info(f"Wrote {tempfile}")
-        
-    shutil.move(tempfile, datafile)
-    print_data_stats(data)
-    
 
 async def connect_ais_stream(api_key, data):
 
@@ -117,44 +118,156 @@ async def connect_ais_stream(api_key, data):
         await websocket.send(subscribe_message_json)
 
         last_write = time.time() #seconds
+        last_purge = time.time()
+        last_mtdata_write = time.time()
+
+        lock = asyncio.Lock()
 
         async for message_json in websocket:
             message = json.loads(message_json)
             message_type = message["MessageType"]
             
-            mmsi = message["MetaData"]["MMSI"]
+            mmsi = str(message["MetaData"]["MMSI"])
             
             time_utc = message["MetaData"]["time_utc"]
 
             #print(f"{message_type} {mmsi} {time_utc}")
-            
-            if not message_type in data: data[message_type] = {}
-            
-            data[message_type][mmsi] = message
-
-            #pprint.pprint(message)
-
-            if message_type == "PositionReport":
-                # the message parameter contains a key of the message type which contains the message itself
-                ais_message = message['Message']['PositionReport']
-
+            async with lock:
+                if not message_type in data:
+                    logger.info("Initializing data['%s']", message_type)
+                    data[message_type] = {}
                 
-                
-                #print(f"[{datetime.now(timezone.utc)}] ShipId: {ais_message['UserID']} Latitude: {ais_message['Latitude']} Latitude: {ais_message['Longitude']}")
-            if message_type == "ExtendedClassBPositionReport":
-                # the message parameter contains a key of the message type which contains the message itself
-                #ais_message = message['Message']['PositionReport']
+                data[message_type][mmsi] = message
 
+                cur_time = time.time()
                 
-                
-                #print(f"[{datetime.now(timezone.utc)}] ShipId: {ais_message['UserID']} Latitude: {ais_message['Latitude']} Latitude: {ais_message['Longitude']}")
-                pass
+                '''persist local copy every 10 minutes'''
+                if (cur_time - last_write) > 600.0:
+                    write_data(data)
+                    last_write = cur_time
 
-            cur_time = time.time()
-            
-            if (cur_time - last_write) > 30.0:
-                write_data(data)
-                last_write = cur_time
-            
+                '''purge every 60 seconds'''
+                if (cur_time - last_purge) > 60.0:
+                    purge_data(data)
+                    last_purge = cur_time
+
+                '''write out for web every 15 seconds'''
+                if (cur_time - last_mtdata_write) > 15.0:
+                    write_mtdata(data)
+                    last_mtdata_write = cur_time
+
+
+def print_data_stats(data):
+    for type in data:
+        #print(type)
+        #subpiece = data[type]
+        #print(len(subpiece))
+        logger.info('%s: %d', type, len(data[type]))
+
+
+def write_data(data):
+    tempfile = Path(datafile.name + '.tmp')
+    with open(tempfile, mode='w') as df:
+        json.dump(data, df)
+        logger.info("Wrote " + tempfile.absolute())
+        
+    shutil.move(tempfile, datafile)
+    logger.info("Renamed %s to %s", tempfile.absolute(), datafile.absolute())
+
+
+def write_mtdata(data):
+    if not 'PositionReport' in data: return
+
+    newdata = []
+
+    for key in data['PositionReport']:
+        prdata = data['PositionReport'][key]
+    
+        mtdata = {
+            'MMSI': key,
+            'COURSE': str(round(prdata['Message']['PositionReport']['Cog'])),
+            'LONG': str(prdata['Message']['PositionReport']['Longitude']),
+            'LAT': str(prdata['Message']['PositionReport']['Latitude']),
+            'SHIPNAME': prdata['MetaData']['ShipName'].rstrip(),
+            'SPEED': str(round(prdata['Message']['PositionReport']['Sog'] * 10)),
+            'TIMESTAMP': prdata['MetaData']['time_utc']
+        }
+    
+        if key in data['ShipStaticData']:
+            sdata = data['ShipStaticData'][key]
+            mtdata['SHIPTYPE'] = str(sdata['Message']['ShipStaticData']['Type'])
+    
+        newdata.append(mtdata)
+    
+    # #-----Dummy add in MARY A. WHALEN
+    # my %mary;
+    mary = {}
+    mary["LAT"] = "40.680700"
+    mary["LONG"] = "-74.012783"
+    mary["SPEED"] = "0"
+    mary["COURSE"] = "47"
+    mary["MMSI"] = "-5227445" #what MarineTraffic uses
+    mary["SHIP_ID"] = "964330" #MarineTraffic
+    mary["SHIPNAME"] = "MARY A. WHALEN"
+    mary["FLAG"] = "US"
+    mary["LENGTH"] = "52.4" #172 ft in meters
+    mary["YEAR_BUILT"] = "1938"
+    mary["STATUS"] = "5" #moored
+    mary["SHIPTYPE"] = "80" #tanker
+    mary["TIMESTAMP"] = datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f %z %Z')
+    
+    newdata.append(mary)
+
+    mtfile = Path('mtdata.json')
+    with open(mtfile, 'w') as f:
+        json.dump(newdata, f)
+    logger.info("Wrote new %s", mtfile)
+
+    targetdir = Path('/var/www')
+    if targetdir.exists():
+        shutil.copy(mtfile, targetdir)
+        logger.info("Wrote new %s", mtfile)
+
+
+#----Purge some old vessels----
+#$localtime is the current time
+#$gmtime is current time
+#loop through old simple data and wipe out anything where:
+# a) TIMESTAMP is older than 5 hours & speed was greater than 0.5 kts, or
+# b) speed was greater than 2 knts and older than 10 minutes, or
+# c) speed <= 0.5 kts and older than 48 hrs
+def purge_data(data):
+    if not 'PositionReport' in data: return
+
+    now = datetime.now(tz=timezone.utc)
+    
+    ten_minutes = timedelta(minutes=10)
+    five_hours = timedelta(hours=5)
+    two_days = timedelta(hours=48)
+    
+    for mmsi in data['PositionReport']:
+        prdata = data['PositionReport'][mmsi]
+        
+        #"2023-07-08 19:42:33.398935932 +0000 UTC"
+        pr_timestamp_str = prdata['MetaData']['time_utc']
+        #strip off fraction of second
+        pr_timestamp_str = re.sub(r'\.\d+', '', pr_timestamp_str)
+        
+        pr_timestamp = datetime.strptime(pr_timestamp_str, '%Y-%m-%d %H:%M:%S %z %Z')
+        
+        pr_speed = prdata['Message']['PositionReport']['Sog']
+
+        purge = False
+
+        if (now - pr_timestamp) > five_hours and pr_speed > 0.5:
+            logger.info("Purging MMSI %s older than 5 hours (%s) and speed > 0.5 kt (%f)", mmsi, pr_timestamp, pr_speed)
+            purge = True
+        elif (now - pr_timestamp) > ten_minutes and pr_speed > 2.0:
+            logger.info("Purging MMSI %s older than 10 minutes (%s) and speed > 2.0 kt (%f)", mmsi, pr_timestamp, pr_speed)
+            purge = True
+        elif pr_speed <= 0.5 and (now - pr_timestamp) > two_days:
+            logger.info("Purging MMSI %s older than 48 hours (%s) and speed <= 0.5 kt (%f)", mmsi, pr_timestamp, pr_speed)
+            purge = True
+
 if __name__ == "__main__":
     main()
