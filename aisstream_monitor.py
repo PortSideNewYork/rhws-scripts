@@ -1,18 +1,20 @@
 #!/usr/bin/python3
 
-import asyncio
+#import asyncio
+import codecs
 import configparser
 from datetime import datetime, timezone, timedelta
 import json
 import logging
 import os
-from pathlib import Path
+#from pathlib import Path
 import pprint
 import re
 import shutil
+import ssl
 import sys
 import time
-import websockets
+import websocket
 
 
 
@@ -54,7 +56,7 @@ import websockets
 # }
 
 '''Globals'''
-datafile = Path('aisstream.json')
+datafile = 'aisstream.json'
 config = configparser.ConfigParser()
 
 logger = logging.getLogger('logger')
@@ -80,11 +82,11 @@ def main():
         logger.fatal("Cannot read in API key")
         sys.exit(1)
 
-    if datafile.exists():
+    if os.path.exists(datafile):
         with open(datafile, mode='r') as f:
             data = json.load(f)
 
-        logger.info("Read %s", datafile.absolute())
+        logger.info("Read %s", datafile)
         print_data_stats(data)
 
         purge_data(data)
@@ -95,7 +97,8 @@ def main():
     
     while True:
         try:
-            asyncio.run(asyncio.run(connect_ais_stream(api_key, data)))
+            #asyncio.run(asyncio.run(connect_ais_stream(api_key, data)))
+            connect_ais_stream(api_key, data)
         except ConnectionResetError as err:
             secs = 10
             logger.error("Connection error: " + str(err))
@@ -104,57 +107,69 @@ def main():
             logger.info("Trying again ...")
 
 
-async def connect_ais_stream(api_key, data):
+def connect_ais_stream(api_key, data):
 
-    async with websockets.connect("wss://stream.aisstream.io/v0/stream") as websocket:
-        subscribe_message = {"APIKey": api_key,  # Required !
-                             "BoundingBoxes": [[[40.601, -74.169], [40.792, -73.902]]], # Required!
-                             #"FiltersShipMMSI": ["368207620", "367719770", "211476060"], # Optional!
-                             "FilterMessageTypes": ["PositionReport",
-                                                    #"ExtendedClassBPositionReport",
-                                                    "ShipStaticData"]} # Optional!
+    my_context = ssl.create_default_context()
+    my_context.verify_mode = ssl.CERT_REQUIRED
+    my_context.check_hostname = True
+    my_context.load_default_certs()
 
-        subscribe_message_json = json.dumps(subscribe_message)
-        await websocket.send(subscribe_message_json)
+    sock = websocket.WebSocket(sslopt={'context': my_context})
+    sock.connect("wss://stream.aisstream.io/v0/stream")
 
-        last_write = time.time() #seconds
-        last_purge = time.time()
-        last_mtdata_write = time.time()
+    subscribe_message = {"APIKey": api_key,  # Required !
+                         "BoundingBoxes": [[[40.596, -74.169], [40.730, -73.902]]], # Required!
+                         #"FiltersShipMMSI": ["368207620", "367719770", "211476060"], # Optional!
+                         "FilterMessageTypes": ["PositionReport",
+                                                #"ExtendedClassBPositionReport",
+                                                "ShipStaticData"]} # Optional!
 
-        lock = asyncio.Lock()
+    subscribe_message_json = json.dumps(subscribe_message)
+    sock.send(subscribe_message_json)
 
-        async for message_json in websocket:
-            message = json.loads(message_json)
-            message_type = message["MessageType"]
-            
-            mmsi = str(message["MetaData"]["MMSI"])
-            
-            time_utc = message["MetaData"]["time_utc"]
+    last_write = time.time() #seconds
+    last_purge = time.time()
+    last_mtdata_write = time.time()
 
-            #print(f"{message_type} {mmsi} {time_utc}")
-            async with lock:
-                if not message_type in data:
-                    logger.info("Initializing data['%s']", message_type)
-                    data[message_type] = {}
-                
-                data[message_type][mmsi] = message
+    #lock = asyncio.Lock()
 
-                cur_time = time.time()
-                
-                '''persist local copy every 10 minutes'''
-                if (cur_time - last_write) > 600.0:
-                    write_data(data)
-                    last_write = cur_time
+    #async for message_json in websocket:
 
-                '''purge every 60 seconds'''
-                if (cur_time - last_purge) > 60.0:
-                    purge_data(data)
-                    last_purge = cur_time
+    while True:
+        message_json = sock.recv()
+        if message_json is None: break
+        
+        message = json.loads(codecs.decode(message_json))
+        message_type = message["MessageType"]
+        
+        mmsi = str(message["MetaData"]["MMSI"])
+        
+        time_utc = message["MetaData"]["time_utc"]
 
-                '''write out for web every 15 seconds'''
-                if (cur_time - last_mtdata_write) > 15.0:
-                    write_mtdata(data)
-                    last_mtdata_write = cur_time
+        #print(f"{message_type} {mmsi} {time_utc}")
+        #async with lock:
+        if not message_type in data:
+            logger.info("Initializing data['%s']", message_type)
+            data[message_type] = {}
+        
+        data[message_type][mmsi] = message
+
+        cur_time = time.time()
+        
+        '''persist local copy every 10 minutes'''
+        if (cur_time - last_write) > 600.0:
+            write_data(data)
+            last_write = cur_time
+
+        '''purge every 60 seconds'''
+        if (cur_time - last_purge) > 60.0:
+            purge_data(data)
+            last_purge = cur_time
+
+        '''write out for web every 15 seconds'''
+        if (cur_time - last_mtdata_write) > 15.0:
+            write_mtdata(data)
+            last_mtdata_write = cur_time
 
 
 def print_data_stats(data):
@@ -166,13 +181,13 @@ def print_data_stats(data):
 
 
 def write_data(data):
-    tempfile = Path(datafile.name + '.tmp')
+    tempfile = datafile + '.tmp'
     with open(tempfile, mode='w') as df:
         json.dump(data, df)
         logger.info("Wrote " + tempfile.absolute())
         
     shutil.move(tempfile, datafile)
-    logger.info("Renamed %s to %s", tempfile.absolute(), datafile.absolute())
+    logger.info("Renamed %s to %s", tempfile, datafile)
 
 
 def write_mtdata(data):
@@ -218,15 +233,15 @@ def write_mtdata(data):
     
     newdata.append(mary)
 
-    mtfile = Path('mtdata.json')
+    mtfile = 'mtdata.json'
     with open(mtfile, 'w') as f:
         json.dump(newdata, f)
-    logger.info("Wrote new %s", mtfile)
+    logger.info("Wrote new local %s", mtfile)
 
-    targetdir = Path('/var/www')
-    if targetdir.exists():
+    targetdir = '/var/www'
+    if os.path.exists(targetdir):
         shutil.copy(mtfile, targetdir)
-        logger.info("Wrote new %s", mtfile)
+        logger.info("Wrote new %s/%s", targetdir, mtfile)
 
 
 #----Purge some old vessels----
