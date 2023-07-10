@@ -259,6 +259,8 @@ def purge_data(data):
     ten_minutes = timedelta(minutes=10)
     five_hours = timedelta(hours=5)
     two_days = timedelta(hours=48)
+
+    deletes = []
     
     for mmsi in data['PositionReport']:
         prdata = data['PositionReport'][mmsi]
@@ -283,6 +285,13 @@ def purge_data(data):
         elif pr_speed <= 0.5 and (now - pr_timestamp) > two_days:
             logger.info("Purging MMSI %s older than 48 hours (%s) and speed <= 0.5 kt (%f)", mmsi, pr_timestamp, pr_speed)
             purge = True
+
+        if purge:
+            deletes.append(mmsi)
+
+    for mmsi in deletes:
+        del data['PositionReport'][mmsi]
+
 
 if __name__ == "__main__":
     main()
