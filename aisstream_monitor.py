@@ -212,7 +212,7 @@ def write_mtdata(data):
             sdata = data['ShipStaticData'][key]
             mtdata['SHIPTYPE'] = str(sdata['Message']['ShipStaticData']['Type'])
     
-        newdata.append(mtdata)
+            newdata.append(mtdata)
     
     # #-----Dummy add in MARY A. WHALEN
     # my %mary;
