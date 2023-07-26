@@ -99,7 +99,7 @@ def main():
         try:
             #asyncio.run(asyncio.run(connect_ais_stream(api_key, data)))
             connect_ais_stream(api_key, data)
-        except ConnectionResetError as err:
+        except Exception as err:
             secs = 10
             logger.error("Connection error: " + str(err))
             logger.debug("Sleeping %d s. ...", secs)
