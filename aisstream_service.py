@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import TimeoutError
 import configparser
 from datetime import datetime, timezone, timedelta
 import json
@@ -13,8 +14,9 @@ import threading
 # import queue
 import time
 import websockets
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
-from flask import Flask, jsonify, Blueprint
+# from flask import Flask, jsonify, Blueprint
 
 #'Dimension': {'A': 6, 'B': 15, 'C': 5, 'D': 3},
 #dimension a: the distance in meters from the GPS to the bow
@@ -112,22 +114,22 @@ from flask import Flask, jsonify, Blueprint
 '''Globals'''
 # datafile = 'aisstream.json'
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger()
 
 data_lock = threading.Lock()
 
-main_bp = Blueprint('main', __name__)
+# main_bp = Blueprint('main', __name__)
 
 # q = queue.Queue()
 # purge_q = queue.Queue()
 
 
-def create_app():
-    app = Flask(__name__)
+def main():
+    # app = Flask(__name__)
 
     # This is for Flask decorators
-    app.register_blueprint(main_bp)
+    # app.register_blueprint(main_bp)
 
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
     for h in logger.handlers:
@@ -137,9 +139,10 @@ def create_app():
     # logger.warning("create_app")
     config = configparser.ConfigParser()
     try:
+        config_file = Path(Path(__file__).parent.resolve(), 'aisstream_config.ini')
         # config.read('aisstream_api_key.ini')
         # api_key = config['DEFAULT']['APIKey']
-        config.read('aisstream_config.ini')
+        config.read(config_file)
         # api_key = config['DEFAULT']['APIKey']
     except Exception:
         logger.fatal("Cannot read in config")
@@ -170,7 +173,9 @@ def create_app():
     t.start()
     # logger.info("Thread started")
 
-    return app
+    # return app
+    t.join()
+    
 
 
 def get_data_file(config):
@@ -187,9 +192,9 @@ def get_mtdata_file(config):
     return datafile
 
 
-@main_bp.route("/status")
-def get_status():
-    return jsonify({"status": "OK"})
+# @main_bp.route("/status")
+# def get_status():
+#     return jsonify({"status": "OK"})
 
 
 # @main_bp.route("/mtdata")
@@ -263,60 +268,98 @@ async def connect_ais_stream(data, config):
     datafile = get_data_file(config)
     mtdatafile = get_mtdata_file(config)
     ais_stream_uri = "wss://stream.aisstream.io/v0/stream"
+    retry_delay = 5 # Seconds to wait before retrying a failed connection
 
-    async with websockets.connect(ais_stream_uri) as websocket:
-        subscribe_message = {"APIKey": api_key,  # Required !
-                             "BoundingBoxes": [[[40.596, -74.169], [40.730, -73.902]]], # Required!
-                             # "FiltersShipMMSI": ["368207620", "367719770", "211476060"], # Optional!
-                             "FilterMessageTypes": ["PositionReport", "ShipStaticData"]} # Optional!
+    end_at = datetime.strptime(config["DEFAULT"]["StopTime"], "%H:%M") # 03:15 - we're just using the time, not the whole thing
+    logger.info("We'll end at %s", end_at.strftime("%H:%M"))
 
-        # logger.info(subscribe_message)
-        subscribe_message_json = json.dumps(subscribe_message)
-        await websocket.send(subscribe_message_json)
+    while True:
+        try:
+            async with websockets.connect(ais_stream_uri, open_timeout=30) as websocket:
+                subscribe_message = {"APIKey": api_key,  # Required !
+                                     "BoundingBoxes": [[[40.596, -74.169], [40.730, -73.902]]], # Required!
+                                     # "FiltersShipMMSI": ["368207620", "367719770", "211476060"], # Optional!
+                                     "FilterMessageTypes": ["PositionReport", "ShipStaticData"]} # Optional!
 
-        last_write = time.time() #seconds
-        last_purge = time.time()
-        last_mtdata_write = time.time()
+                # logger.info(subscribe_message)
+                subscribe_message_json = json.dumps(subscribe_message)
+                await asyncio.wait_for(websocket.send(subscribe_message_json), timeout=10.0)
 
-        logger.info("Connected to %s", ais_stream_uri)
+                last_write = time.time() #seconds
+                last_purge = time.time()
+                last_mtdata_write = time.time()
 
-        async for message_json in websocket:
-            message = json.loads(message_json)
-            message_type = message["MessageType"]
+                logger.info("Connected to %s", ais_stream_uri)
 
-            mmsi = str(message["MetaData"]["MMSI"])
+                async for message_json in websocket:
+                    try:
+                        message = json.loads(message_json)
+                        message_type = message["MessageType"]
+
+                        mmsi = str(message["MetaData"]["MMSI"])
+                    except json.JSONDecodeError:
+                        logger.error("Failed to decode JSON message from server.")
+                        continue
+                    except KeyError as e:
+                        logger.error(f"Message missing expected key: {e}")
+                        continue
+
+                    cur_time = time.time()
+
+                    logger.debug("Received %s for %s", message_type, mmsi)
+
+                    with data_lock:
+                        data[message_type][mmsi] = message
+
+                    # persist local copy every 10 minutes
+                    if (cur_time - last_write) > 600.0:
+                        with data_lock:
+                            write_data(data, datafile)
+                            last_write = cur_time
+
+                    # purge every 60 seconds
+                    if (cur_time - last_purge) > 60.0:
+                        with data_lock:
+                            purge_data(data)
+                            last_purge = cur_time
+
+                    # write out for web every 15 seconds
+                    if (cur_time - last_mtdata_write) > 15.0:
+                        with data_lock:
+                            # print_data_stats(data)
+                            write_mtdata(data, mtdatafile)
+                            last_mtdata_write = cur_time
+
+                    if time_to_end(end_at):
+                        return
+
+        except (TimeoutError, asyncio.exceptions.TimeoutError) as e:
+            logger.warning(f"Connection timed out: {e}. Retrying...")
+            if time_to_end(end_at):
+                return
+            await asyncio.sleep(5)
+
+        except (ConnectionClosed, WebSocketException) as e:
+            logger.warning(f"Connection lost or failed: {e}. Retrying in {retry_delay}s...")
+            if time_to_end(end_at):
+                return
+            await asyncio.sleep(retry_delay)
+
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}. Shutting down.")
+            break # Exit on critical non-websocket errors
+
+
+def time_to_end(end_at):
+    now = datetime.now()
+    if now.hour == end_at.hour:
+        if end_at.minute <= now.minute <= end_at.minute + 5:
+            logger.info("Time to end!")
+            return True
+
+    return False
         
-            # time_utc = message["MetaData"]["time_utc"]
-
-            cur_time = time.time()
-
-            logger.debug("Received %s for %s", message_type, mmsi)
-
-            with data_lock:
-                data[message_type][mmsi] = message
-
-            cur_time = time.time()
-        
-            '''persist local copy every 10 minutes'''
-            if (cur_time - last_write) > 600.0:
-                with data_lock:
-                    write_data(data, datafile)
-                last_write = cur_time
-
-            '''purge every 60 seconds'''
-            if (cur_time - last_purge) > 60.0:
-                with data_lock:
-                    purge_data(data)
-                last_purge = cur_time
-
-            '''write out for web every 15 seconds'''
-            if (cur_time - last_mtdata_write) > 15.0:
-                with data_lock:
-                    # print_data_stats(data)
-                    write_mtdata(data, mtdatafile)
-                last_mtdata_write = cur_time
-            
-
+    
 def print_data_stats(data):
     for type in data:
         #print(type)
@@ -442,7 +485,8 @@ def write_mtdata(data, mtdatafile):
 
 
 if __name__ == "__main__":
-    app = create_app()
+    # app = create_app()
 
-    logger.error("MAIN!!!")
-    app.run(debug=True, use_reloader=True)
+    #logger.info("MAIN!!!")
+    #app.run(debug=True, use_reloader=True)
+    main()
