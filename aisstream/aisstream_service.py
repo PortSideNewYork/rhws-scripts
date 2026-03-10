@@ -298,7 +298,7 @@ async def connect_ais_stream(data, config):
 def time_to_end(end_at):
     now = datetime.now()
     if now.hour % 2 == 1:
-        if end_at <= now.minute <= end_at.minute + 4:
+        if end_at <= now.minute <= end_at + 4:
             logger.info("Time to end!")
             return True
 
