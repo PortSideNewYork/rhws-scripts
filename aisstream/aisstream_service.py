@@ -5,18 +5,13 @@ from datetime import datetime, timezone, timedelta
 import json
 import logging
 from pathlib import Path
-# from pprint import pprint
 import os
 import regex
-# import shutil
 import sys
-import threading
-# import queue
+#import threading
 import time
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
-
-# from flask import Flask, jsonify, Blueprint
 
 #'Dimension': {'A': 6, 'B': 15, 'C': 5, 'D': 3},
 #dimension a: the distance in meters from the GPS to the bow
@@ -112,40 +107,31 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 #               'time_utc': '2026-02-15 17:56:43.70794484 +0000 UTC'}}
 
 '''Globals'''
-# datafile = 'aisstream.json'
 
-logging.basicConfig(level=logging.DEBUG)
+FORMAT='%(asctime)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.DEBUG,
+                    format=FORMAT,
+                    filename='aisstream_service.log',
+                    filemode='w',
+                    encoding='utf-8')
 logger = logging.getLogger()
+stderr_handler = logging.StreamHandler(sys.stderr)
+stderr_handler.setLevel(logging.WARNING)
+formatter=logging.Formatter(FORMAT)
+stderr_handler.setFormatter(formatter)
+logger.addHandler(stderr_handler)
 
-data_lock = threading.Lock()
-
-# main_bp = Blueprint('main', __name__)
-
-# q = queue.Queue()
-# purge_q = queue.Queue()
+#data_lock = threading.Lock()
 
 
 def main():
-    # app = Flask(__name__)
 
-    # This is for Flask decorators
-    # app.register_blueprint(main_bp)
-
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-    for h in logger.handlers:
-        # print(h)
-        h.setFormatter(formatter)
-
-    # logger.warning("create_app")
     config = configparser.ConfigParser()
     try:
         config_file = Path(Path(__file__).parent.resolve(), 'aisstream_config.ini')
-        # config.read('aisstream_api_key.ini')
-        # api_key = config['DEFAULT']['APIKey']
         config.read(config_file)
-        # api_key = config['DEFAULT']['APIKey']
     except Exception:
-        logger.fatal("Cannot read in config")
+        logger.fatal("Cannot read in config", exc_info=True)
         sys.exit(1)
 
     datafile = get_data_file(config)
@@ -165,17 +151,18 @@ def main():
             "ShipStaticData": {}
         }
 
-    #asyncio.run(connect_ais_stream(data, config))        
-    #logger.info("AFTER")
-    #new_loop = asyncio.new_event_loop()
-    # logger.info("Starting thread...")
-    t = threading.Thread(target=start_background_loop, args=(data,config,), daemon=True)
-    t.start()
-    # logger.info("Thread started")
+    asyncio.run(connect_ais_stream(data, config))
 
-    # return app
-    t.join()
-    
+    # t = threading.Thread(
+    #     target=start_background_loop,
+    #     args=(data,config,),
+    #     daemon=True)
+    # t.start()
+
+    # # return app
+    # t.join()
+
+    logger.debug("End of main()")
 
 
 def get_data_file(config):
@@ -192,46 +179,6 @@ def get_mtdata_file(config):
     return datafile
 
 
-# @main_bp.route("/status")
-# def get_status():
-#     return jsonify({"status": "OK"})
-
-
-# @main_bp.route("/mtdata")
-# def format_data_as_mtdata():
-#     newdata = []
-
-#     with data_lock:
-#         # Get data from queue and put into data
-#         while not q.empty():
-#             try:
-#                 item = q.get_nowait()
-#                 message_type, mmsi, message = item
-#                 logger.info("Add to data: %s for %s", message_type, mmsi)
-#                 data[message_type][mmsi] = message
-#                 q.task_done()
-#             except queue.Empty:
-#                 break
-
-#         for key in data['PositionReport']:
-#             prdata = data['PositionReport'][key]
-
-#             mtdata = {
-#                 'MMSI': key,
-#                 'COURSE': str(round(prdata['Message']['PositionReport']['Cog'])),
-#                 'LONG': str(prdata['Message']['PositionReport']['Longitude']),
-#                 'LAT': str(prdata['Message']['PositionReport']['Latitude']),
-#                 'SHIPNAME': prdata['MetaData']['ShipName'].rstrip(),
-#                 'SPEED': str(round(prdata['Message']['PositionReport']['Sog'] * 10)),
-#                 'TIMESTAMP': prdata['MetaData']['time_utc']
-#             }
-
-#             if key in data['ShipStaticData']:
-#                 sdata = data['ShipStaticData'][key]
-#                 mtdata['SHIPTYPE'] = str(sdata['Message']['ShipStaticData']['Type'])
-
-#                 newdata.append(mtdata)
-            
 #     # #-----Dummy add in MARY A. WHALEN
 #     # my %mary;
 #     mary = {}
@@ -248,18 +195,10 @@ def get_mtdata_file(config):
 #     mary["STATUS"] = "5" #moored
 #     mary["SHIPTYPE"] = "80" #tanker
 #     mary["TIMESTAMP"] = datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f %z %Z')
-    
-#     newdata.append(mary)
-
-#     return jsonify(newdata)
 
 
-def start_background_loop( data, config):
-    # logging.info("start_background_loop")
-    #asyncio.set_event_loop(loop)
-    #loop.run_until_complete(connect_ais_stream(data, config))
-    asyncio.run(connect_ais_stream(data, config))
-    #connect_ais_stream(data, config)
+# def start_background_loop( data, config):
+#     asyncio.run(connect_ais_stream(data, config))
 
 
 async def connect_ais_stream(data, config):
@@ -270,11 +209,14 @@ async def connect_ais_stream(data, config):
     ais_stream_uri = "wss://stream.aisstream.io/v0/stream"
     retry_delay = 5 # Seconds to wait before retrying a failed connection
 
-    end_at = datetime.strptime(config["DEFAULT"]["StopTime"], "%H:%M") # 03:15 - we're just using the time, not the whole thing
+    # 03:15 - we're just using the time, not the whole thing
+    end_at = datetime.strptime(config["DEFAULT"]["StopTime"], "%H:%M")
+
     logger.info("We'll end at %s", end_at.strftime("%H:%M"))
 
     while True:
         try:
+            logger.debug("Connecting to %s", ais_stream_uri)
             async with websockets.connect(ais_stream_uri, open_timeout=30) as websocket:
                 subscribe_message = {"APIKey": api_key,  # Required !
                                      "BoundingBoxes": [[[40.596, -74.169], [40.730, -73.902]]], # Required!
@@ -283,6 +225,7 @@ async def connect_ais_stream(data, config):
 
                 # logger.info(subscribe_message)
                 subscribe_message_json = json.dumps(subscribe_message)
+                logger.debug("Sending subscribe message")
                 await asyncio.wait_for(websocket.send(subscribe_message_json), timeout=10.0)
 
                 last_write = time.time() #seconds
@@ -308,27 +251,27 @@ async def connect_ais_stream(data, config):
 
                     logger.debug("Received %s for %s", message_type, mmsi)
 
-                    with data_lock:
-                        data[message_type][mmsi] = message
+                    # with data_lock:
+                    data[message_type][mmsi] = message
 
                     # persist local copy every 10 minutes
                     if (cur_time - last_write) > 600.0:
-                        with data_lock:
-                            write_data(data, datafile)
-                            last_write = cur_time
+                        # with data_lock:
+                        write_data(data, datafile)
+                        last_write = cur_time
 
                     # purge every 60 seconds
                     if (cur_time - last_purge) > 60.0:
-                        with data_lock:
-                            purge_data(data)
-                            last_purge = cur_time
+                        # with data_lock:
+                        purge_data(data)
+                        last_purge = cur_time
 
                     # write out for web every 15 seconds
                     if (cur_time - last_mtdata_write) > 15.0:
-                        with data_lock:
-                            # print_data_stats(data)
-                            write_mtdata(data, mtdatafile)
-                            last_mtdata_write = cur_time
+                        # with data_lock:
+                        # print_data_stats(data)
+                        write_mtdata(data, mtdatafile)
+                        last_mtdata_write = cur_time
 
                     if time_to_end(end_at):
                         return
@@ -346,9 +289,8 @@ async def connect_ais_stream(data, config):
             await asyncio.sleep(retry_delay)
 
         except Exception as e:
-            logger.error(f"Unexpected error: {e}. Shutting down.")
+            logger.error(f"Unexpected error: {e}. Shutting down.", exc_info=True)
             break # Exit on critical non-websocket errors
-
 
 def time_to_end(end_at):
     now = datetime.now()
@@ -485,8 +427,7 @@ def write_mtdata(data, mtdatafile):
 
 
 if __name__ == "__main__":
-    # app = create_app()
-
-    #logger.info("MAIN!!!")
-    #app.run(debug=True, use_reloader=True)
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.fatal(f"Unexpected error: {e}. Shutting down.", exc_info=True)
