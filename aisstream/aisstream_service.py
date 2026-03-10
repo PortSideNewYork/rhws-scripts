@@ -210,9 +210,10 @@ async def connect_ais_stream(data, config):
     retry_delay = 5 # Seconds to wait before retrying a failed connection
 
     # 03:15 - we're just using the time, not the whole thing
-    end_at = datetime.strptime(config["DEFAULT"]["StopTime"], "%H:%M")
+    #end_at = datetime.strptime(config["DEFAULT"]["StopTime"], "%H:%M")
+    end_at = int(config["DEFAULT"]["StopTime"])
 
-    logger.info("We'll end at %s", end_at.strftime("%H:%M"))
+    logger.info("We'll end at %s in odd hours", end_at)
 
     while True:
         try:
@@ -254,6 +255,11 @@ async def connect_ais_stream(data, config):
                     # with data_lock:
                     data[message_type][mmsi] = message
 
+                    if time_to_end(end_at):
+                        write_mtdata(data, mtdatafile)
+                        write_data(data, datafile)
+                        return
+
                     # persist local copy every 10 minutes
                     if (cur_time - last_write) > 600.0:
                         # with data_lock:
@@ -273,9 +279,6 @@ async def connect_ais_stream(data, config):
                         write_mtdata(data, mtdatafile)
                         last_mtdata_write = cur_time
 
-                    if time_to_end(end_at):
-                        return
-
         except (TimeoutError, asyncio.exceptions.TimeoutError) as e:
             logger.warning(f"Connection timed out: {e}. Retrying...")
             if time_to_end(end_at):
@@ -294,8 +297,8 @@ async def connect_ais_stream(data, config):
 
 def time_to_end(end_at):
     now = datetime.now()
-    if now.hour == end_at.hour:
-        if end_at.minute <= now.minute <= end_at.minute + 5:
+    if now.hour % 2 == 1:
+        if end_at <= now.minute <= end_at.minute + 4:
             logger.info("Time to end!")
             return True
 
