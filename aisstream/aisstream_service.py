@@ -8,7 +8,7 @@ from pathlib import Path
 import os
 import regex
 import sys
-#import threading
+import threading
 import time
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -151,6 +151,14 @@ def main():
             "ShipStaticData": {}
         }
 
+    # thread to stop at end time
+    t = threading.Thread(
+        target=end_timer,
+        args=(config,),
+        daemon=True
+    )
+    t.start()
+        
     asyncio.run(connect_ais_stream(data, config))
 
     # t = threading.Thread(
@@ -164,6 +172,32 @@ def main():
 
     logger.debug("End of main()")
 
+
+# End program at StopTime in odd hours
+def end_timer(config):
+    end_at_min = int(config["DEFAULT"]["StopTime"])
+
+    now = datetime.now()
+    sleep_mins = 0
+
+    if now.hour % 2 == 0:
+        sleep_mins += 60
+
+    sleep_mins += end_at_min - now.minute 
+    if now.minute >= end_at_min:
+        sleep_mins += 60
+
+    delta = timedelta(minutes=sleep_mins)
+    end_at_time = now + delta
+    end_in_s = (end_at_time - now).total_seconds()
+    logger.info("End at %s = %ss from now", end_at_time, end_in_s)
+
+    #time.sleep(end_at_time
+    time.sleep(end_in_s)
+
+    logger.info("Done!")
+    sys.exit(0)
+    
 
 def get_data_file(config):
     workdir = config["DEFAULT"]["WorkDir"]
@@ -281,20 +315,21 @@ async def connect_ais_stream(data, config):
 
         except (TimeoutError, asyncio.exceptions.TimeoutError) as e:
             logger.warning(f"Connection timed out: {e}. Retrying...")
-            if time_to_end(end_at):
-                return
+            #if time_to_end(end_at):
+            #    return
             await asyncio.sleep(5)
 
         except (ConnectionClosed, WebSocketException) as e:
             logger.warning(f"Connection lost or failed: {e}. Retrying in {retry_delay}s...")
-            if time_to_end(end_at):
-                return
+            #if time_to_end(end_at):
+            #    return
             await asyncio.sleep(retry_delay)
 
         except Exception as e:
             logger.error(f"Unexpected error: {e}. Shutting down.", exc_info=True)
             break # Exit on critical non-websocket errors
 
+        
 def time_to_end(end_at):
     now = datetime.now()
     if now.hour % 2 == 1:
