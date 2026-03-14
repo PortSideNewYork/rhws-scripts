@@ -146,9 +146,13 @@ def main():
                 print_data_stats(data)
 
                 purge_data(data)
-        except JSONDecodeError as e:
+        except json.JSONDecodeError as e:
             logger.error("%s is corrupt", datafile)
             os.remove(datafile)
+            data = {
+                "PositionReport": {},
+                "ShipStaticData": {}
+            }
     else:
         logger.info("No existing %s", datafile)
         data = {
