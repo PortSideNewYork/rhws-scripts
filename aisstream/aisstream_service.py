@@ -121,7 +121,8 @@ formatter=logging.Formatter(FORMAT)
 stderr_handler.setFormatter(formatter)
 logger.addHandler(stderr_handler)
 
-#data_lock = threading.Lock()
+# Create a shared threading.Event object
+exit_event = threading.Event()
 
 
 def main():
@@ -137,13 +138,17 @@ def main():
     datafile = get_data_file(config)
         
     if os.path.exists(datafile):
-        with open(datafile, mode='r') as f:
-            data = json.load(f)
+        try:
+            with open(datafile, mode='r') as f:
+                data = json.load(f)
 
-        logger.info("Read %s", datafile)
-        print_data_stats(data)
+                logger.info("Read %s", datafile)
+                print_data_stats(data)
 
-        purge_data(data)
+                purge_data(data)
+        except JSONDecodeError as e:
+            logger.error("%s is corrupt", datafile)
+            os.remove(datafile)
     else:
         logger.info("No existing %s", datafile)
         data = {
@@ -196,7 +201,9 @@ def end_timer(config):
     time.sleep(end_in_s)
 
     logger.info("Done!")
-    sys.exit(0)
+
+    exit_event.set()
+    # sys.exit(0)
     
 
 def get_data_file(config):
@@ -245,11 +252,11 @@ async def connect_ais_stream(data, config):
 
     # 03:15 - we're just using the time, not the whole thing
     #end_at = datetime.strptime(config["DEFAULT"]["StopTime"], "%H:%M")
-    end_at = int(config["DEFAULT"]["StopTime"])
+    #end_at = int(config["DEFAULT"]["StopTime"])
 
-    logger.info("We'll end at %s in odd hours", end_at)
+    #logger.info("We'll end at %s in odd hours", end_at)
 
-    while True:
+    while not exit_event.is_set():
         try:
             logger.debug("Connecting to %s", ais_stream_uri)
             async with websockets.connect(ais_stream_uri, open_timeout=30) as websocket:
@@ -289,10 +296,10 @@ async def connect_ais_stream(data, config):
                     # with data_lock:
                     data[message_type][mmsi] = message
 
-                    if time_to_end(end_at):
-                        write_mtdata(data, mtdatafile)
-                        write_data(data, datafile)
-                        return
+                    #if time_to_end(end_at):
+                    #    write_mtdata(data, mtdatafile)
+                    #    write_data(data, datafile)
+                    #    return
 
                     # persist local copy every 10 minutes
                     if (cur_time - last_write) > 600.0:
@@ -329,7 +336,12 @@ async def connect_ais_stream(data, config):
             logger.error(f"Unexpected error: {e}. Shutting down.", exc_info=True)
             break # Exit on critical non-websocket errors
 
-        
+    # exit event happened
+    logger.debug("Exit event signaled")
+    write_mtdata(data, mtdatafile)
+    write_data(data, datafile)
+
+   
 def time_to_end(end_at):
     now = datetime.now()
     if now.hour % 2 == 1:
@@ -403,10 +415,12 @@ def write_data(data, datafile):
     with open(tempfile, mode='w') as df:
         json.dump(data, df)
         logger.debug("Wrote %s", tempfile)
-
-    tempfile.replace(datafile)
-    # shutil.move(tempfile, datafile)
-    logger.debug("Wrote new %s", datafile)
+    try:
+        tempfile.replace(datafile)
+        logger.debug("Wrote new %s", datafile)
+    except FileNotFoundError as e:
+        logger.error("Error moving %s", datafile)
+        
 
 
 def write_mtdata(data, mtdatafile):
@@ -459,9 +473,12 @@ def write_mtdata(data, mtdatafile):
         json.dump(newdata, f)
     logger.debug("Wrote new temp %s", tempfile)
 
-    tempfile.replace(mtdatafile)
-    # shutil.move(tempfile, mtdatafile)
-    logger.debug("Wrote new %s", mtdatafile)
+    try:
+        tempfile.replace(mtdatafile)
+        # shutil.move(tempfile, mtdatafile)
+        logger.debug("Wrote new %s", mtdatafile)
+    except FileNotFoundError as e:
+        logger.error("Error moving %s", mtdatafile)
 
 
 if __name__ == "__main__":
