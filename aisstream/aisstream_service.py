@@ -281,6 +281,9 @@ async def connect_ais_stream(data, config):
                 logger.info("Connected to %s", ais_stream_uri)
 
                 async for message_json in websocket:
+                    if exit_event.is_set():
+                        break
+
                     try:
                         message = json.loads(message_json)
                         message_type = message["MessageType"]
